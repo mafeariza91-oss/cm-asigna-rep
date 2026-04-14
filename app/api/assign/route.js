@@ -3,7 +3,10 @@ import Anthropic from "@anthropic-ai/sdk";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-const REPS_FILE = "CM_Territorios_Guia.xlsx";
+const REPS_FILE_PATH = (
+  process.env.SHAREPOINT_FILE_PATH ||
+  "Office Documents/Territorios/CM_Territorios_Guia_v2.xlsx"
+).replace(/^Shared Documents\//i, "");
 const REPS_SHEET = "Perfiles_Reps";
 
 const RULES_AND_FORMAT = `REGLAS:
@@ -71,12 +74,13 @@ async function fetchRepsFromSharePoint() {
   const token = await getGraphToken();
   const siteId = process.env.SHAREPOINT_SITE_ID;
 
+  const encodedPath = REPS_FILE_PATH.split("/").map(encodeURIComponent).join("/");
   const itemRes = await fetch(
-    `https://graph.microsoft.com/v1.0/sites/${siteId}/drive/root:/${encodeURIComponent(REPS_FILE)}`,
+    `https://graph.microsoft.com/v1.0/sites/${siteId}/drive/root:/${encodedPath}`,
     { headers: { Authorization: `Bearer ${token}` } }
   );
   if (!itemRes.ok) {
-    throw new Error(`Buscar ${REPS_FILE}: ${itemRes.status} ${await itemRes.text()}`);
+    throw new Error(`Buscar ${REPS_FILE_PATH}: ${itemRes.status} ${await itemRes.text()}`);
   }
   const item = await itemRes.json();
 
