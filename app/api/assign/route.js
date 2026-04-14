@@ -466,7 +466,15 @@ export async function POST(req) {
       console.log(`[cuentas CSV] cargado OK: ${cuentasResult.count} filas`);
     }
 
-    return Response.json(sanitized);
+    return Response.json({
+      results: sanitized,
+      cuentas_csv: {
+        loaded: cuentasResult.loaded,
+        error: cuentasResult.error || null,
+        count: cuentasResult.count || 0,
+        path: cuentasResult.path,
+      },
+    });
   } catch (err) {
     return Response.json(
       { error: err.message || "Error interno" },

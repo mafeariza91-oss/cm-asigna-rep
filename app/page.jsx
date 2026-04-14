@@ -33,6 +33,7 @@ export default function Page() {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState(null);
+  const [csvStatus, setCsvStatus] = useState(null);
   const [error, setError] = useState(null);
 
   const lineCount = useMemo(
@@ -57,10 +58,14 @@ export default function Page() {
       const data = await res.json();
       if (!res.ok) {
         setError(data.error || "Error en la asignación");
-      } else if (!Array.isArray(data)) {
-        setError("Respuesta inesperada del servidor.");
       } else {
-        setResults(data);
+        const arr = Array.isArray(data) ? data : data.results;
+        if (!Array.isArray(arr)) {
+          setError("Respuesta inesperada del servidor.");
+        } else {
+          setResults(arr);
+          setCsvStatus(data.cuentas_csv || null);
+        }
       }
     } catch (e) {
       setError(e.message || "Error de red");
@@ -73,6 +78,7 @@ export default function Page() {
     setInput("");
     setResults(null);
     setError(null);
+    setCsvStatus(null);
   }
 
   function handleExportCSV() {
@@ -248,6 +254,29 @@ export default function Page() {
           />
           <span style={{ fontSize: 14 }}>Analizando {lineCount} cuenta{lineCount === 1 ? "" : "s"}…</span>
           <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+        </div>
+      )}
+
+      {csvStatus && !csvStatus.loaded && (
+        <div
+          style={{
+            marginTop: 16,
+            padding: 12,
+            background: "#FEF3DB",
+            color: "#8A5A00",
+            border: "1px solid #E8C67A",
+            borderRadius: 8,
+            fontSize: 13,
+            lineHeight: 1.4,
+          }}
+        >
+          <strong>⚠ CSV de cuentas no disponible.</strong> No se pudo verificar si las cuentas
+          ya existen en el CRM. Las asignaciones se hicieron como si fueran cuentas nuevas.
+          {csvStatus.error && (
+            <div style={{ marginTop: 6, fontSize: 12, fontFamily: "monospace", opacity: 0.85 }}>
+              {csvStatus.path} → {csvStatus.error}
+            </div>
+          )}
         </div>
       )}
 
