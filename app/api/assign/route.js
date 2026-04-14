@@ -5,7 +5,7 @@ export const maxDuration = 60;
 
 const REPS_FILE_PATH = (
   process.env.SHAREPOINT_FILE_PATH ||
-  "Office Documents/Territorios/CM_Territorios_Guia.xlsx"
+  "Office Documents/Territorios/CM_Territorios_Guia_v2.xlsx"
 ).replace(/^Shared Documents\//i, "");
 const REPS_SHEET = "Perfiles_Reps";
 
