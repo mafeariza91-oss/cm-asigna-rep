@@ -3,6 +3,9 @@ import Anthropic from "@anthropic-ai/sdk";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
+const REPS_FILE = "CM_Territorios_Guia.xlsx";
+const REPS_SHEET = "Perfiles_Reps";
+
 const RULES_AND_FORMAT = `REGLAS:
 - Brooklyn → Terdiman (primario), Gattinella (overflow)
 - Long Island → Garay
@@ -31,11 +34,13 @@ Responde SOLO con JSON array sin markdown. Cada item:
 
 let cachedToken = null;
 let tokenExpiresAt = 0;
+let cachedReps = null;
+let repsCachedAt = 0;
+const REPS_CACHE_MS = 5 * 60 * 1000;
 
 async function getGraphToken() {
   if (cachedToken && Date.now() < tokenExpiresAt) return cachedToken;
 
-  const tenant = process.env.AZURE_TENANT_ID;
   const body = new URLSearchParams({
     client_id: process.env.AZURE_CLIENT_ID,
     client_secret: process.env.AZURE_CLIENT_SECRET,
@@ -44,7 +49,7 @@ async function getGraphToken() {
   });
 
   const res = await fetch(
-    `https://login.microsoftonline.com/${tenant}/oauth2/v2.0/token`,
+    `https://login.microsoftonline.com/${process.env.AZURE_TENANT_ID}/oauth2/v2.0/token`,
     {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -52,9 +57,7 @@ async function getGraphToken() {
     }
   );
 
-  if (!res.ok) {
-    throw new Error(`Azure token error ${res.status}: ${await res.text()}`);
-  }
+  if (!res.ok) throw new Error(`Azure token ${res.status}: ${await res.text()}`);
 
   const data = await res.json();
   cachedToken = data.access_token;
@@ -63,34 +66,62 @@ async function getGraphToken() {
 }
 
 async function fetchRepsFromSharePoint() {
+  if (cachedReps && Date.now() - repsCachedAt < REPS_CACHE_MS) return cachedReps;
+
   const token = await getGraphToken();
   const siteId = process.env.SHAREPOINT_SITE_ID;
-  const listId = process.env.SHAREPOINT_LIST_ID;
 
-  const url = `https://graph.microsoft.com/v1.0/sites/${siteId}/lists/${listId}/items?expand=fields&$top=500`;
-  const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${token}` },
+  const itemRes = await fetch(
+    `https://graph.microsoft.com/v1.0/sites/${siteId}/drive/root:/${encodeURIComponent(REPS_FILE)}`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+  if (!itemRes.ok) {
+    throw new Error(`Buscar ${REPS_FILE}: ${itemRes.status} ${await itemRes.text()}`);
+  }
+  const item = await itemRes.json();
+
+  const rangeRes = await fetch(
+    `https://graph.microsoft.com/v1.0/sites/${siteId}/drive/items/${item.id}/workbook/worksheets('${REPS_SHEET}')/usedRange?$select=values`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+  if (!rangeRes.ok) {
+    throw new Error(`Leer hoja ${REPS_SHEET}: ${rangeRes.status} ${await rangeRes.text()}`);
+  }
+  const range = await rangeRes.json();
+  const values = range.values || [];
+  if (values.length < 2) return [];
+
+  const headers = values[0].map((h) => String(h || "").trim());
+  const reps = values.slice(1).map((row) => {
+    const obj = {};
+    headers.forEach((h, i) => {
+      obj[h] = row[i];
+    });
+    return obj;
   });
 
-  if (!res.ok) {
-    throw new Error(`SharePoint error ${res.status}: ${await res.text()}`);
-  }
+  cachedReps = reps;
+  repsCachedAt = Date.now();
+  return reps;
+}
 
-  const data = await res.json();
-  return data.value.map((item) => item.fields);
+function normalizeBool(v) {
+  if (typeof v === "boolean") return v;
+  if (typeof v === "number") return v !== 0;
+  const s = String(v || "").trim().toLowerCase();
+  return s === "true" || s === "sí" || s === "si" || s === "yes" || s === "1" || s === "x";
 }
 
 function buildRepsSection(reps) {
-  const activos = reps.filter((r) => r.Activo === true);
+  const activos = reps.filter((r) => normalizeBool(r.Activo));
   const reciben = activos.filter(
-    (r) => r.AceptaCuentas === "Sí" || r.AceptaCuentas === "Con cuidado"
+    (r) => r.AceptaCuentas === "Sí" || r.AceptaCuentas === "Si" || r.AceptaCuentas === "Con cuidado"
   );
   const noReciben = activos.filter((r) => r.AceptaCuentas === "No");
 
   let out = "REPS QUE SÍ RECIBEN CUENTAS:\n\n";
   for (const r of reciben) {
-    const cuidado =
-      r.AceptaCuentas === "Con cuidado" ? " ASIGNAR CON CUIDADO." : "";
+    const cuidado = r.AceptaCuentas === "Con cuidado" ? " ASIGNAR CON CUIDADO." : "";
     out += `- ${r.Nombre} — ${r.Tipo}. ${r.Territorio}. Zonas: ${r.Zonas}.${cuidado}\n`;
   }
 
