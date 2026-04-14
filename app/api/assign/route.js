@@ -207,8 +207,8 @@ async function fetchCuentasFromSharePoint() {
   const text = await res.text();
   const rows = parseCSV(text);
 
-  const nameKeys = ["Cuenta", "Account Name", "Account", "Customer", "Customer Name", "Nombre", "Name"];
-  const repKeys = ["Rep", "Sales Rep", "Representante", "Assigned", "Asignado"];
+  const nameKeys = ["Account", "Account Legal Name", "Account Name", "Cuenta", "Customer", "Customer Name", "Nombre", "Name"];
+  const repKeys = ["Territory Owner Rep", "Rep", "Sales Rep", "Representante", "Assigned", "Asignado"];
   if (!rows.length) return [];
   const sample = rows[0];
   const nameKey = nameKeys.find((k) => k in sample);
