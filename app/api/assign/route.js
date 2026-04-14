@@ -29,7 +29,35 @@ const PREMIUM_KEYWORDS = [
   "country club", "private membership",
 ];
 
-const RULES_AND_FORMAT = `REGLAS DE TERRITORIO:
+const RULES_AND_FORMAT = `CRÍTICO: NUNCA inventes nombres de reps. Los únicos valores válidos para rep_primario y rep_alternativo son EXACTAMENTE estos:
+
+REPS DE VENTAS:
+- Garay, Anthony
+- Terdiman, Irene
+- Miranti, Michael
+- Perez, Gaudencio
+- Gattinella, Mike
+- Spaleta, Domenik
+- Hautzig, David
+- Calderon, Scott
+- Westenberger, Matt
+- Rozinsky, Irina
+- Angeroise, Michele
+- Cittadino, Robert
+- Forni, Tiziana
+- Landeck, Howard
+- Martin, David
+- Webber, Chandler
+
+ESCALACIÓN (no son reps de zona, son para cuentas especiales):
+- Barco, Diego — CEO, escalar cuentas premium/Michelin
+- Fernandez Revuelta, Pablo — Outbound Sales Manager, escalar cuentas estratégicas nuevas
+- CM, Accounts Available — cuenta disponible sin rep asignado
+
+Si el CSV indica que la cuenta ya tiene rep, usa ESE nombre exacto del CSV.
+Si no encuentras rep adecuado, usa "Por determinar" — NUNCA inventes un nombre ni agregues primer nombre distinto al listado.
+
+REGLAS DE TERRITORIO:
 - Brooklyn → Terdiman (primario), Gattinella (overflow)
 - Long Island → Garay
 - Hoboken/Jersey City/Newark → Calderon
@@ -197,31 +225,54 @@ async function fetchCuentasFromSharePoint() {
     { headers: { Authorization: `Bearer ${token}` } }
   );
   if (!res.ok) {
-    if (res.status === 404) {
-      cachedCuentas = [];
-      cuentasCachedAt = Date.now();
-      return [];
-    }
-    throw new Error(`Buscar ${CUENTAS_FILE_PATH}: ${res.status} ${await res.text()}`);
+    const errText = await res.text();
+    const result = {
+      cuentas: [],
+      loaded: false,
+      error: `${res.status}: ${errText.slice(0, 200)}`,
+      path: CUENTAS_FILE_PATH,
+    };
+    cachedCuentas = result;
+    cuentasCachedAt = Date.now();
+    return result;
   }
   const text = await res.text();
   const rows = parseCSV(text);
 
   const nameKeys = ["Account", "Account Legal Name", "Account Name", "Cuenta", "Customer", "Customer Name", "Nombre", "Name"];
   const repKeys = ["Territory Owner Rep", "Rep", "Sales Rep", "Representante", "Assigned", "Asignado"];
-  if (!rows.length) return [];
+
+  if (!rows.length) {
+    const result = { cuentas: [], loaded: true, error: "CSV vacío", path: CUENTAS_FILE_PATH };
+    cachedCuentas = result;
+    cuentasCachedAt = Date.now();
+    return result;
+  }
+
   const sample = rows[0];
   const nameKey = nameKeys.find((k) => k in sample);
   const repKey = repKeys.find((k) => k in sample);
+  if (!nameKey || !repKey) {
+    const result = {
+      cuentas: [],
+      loaded: true,
+      error: `Columnas no reconocidas. Headers: ${Object.keys(sample).join(", ")}`,
+      path: CUENTAS_FILE_PATH,
+    };
+    cachedCuentas = result;
+    cuentasCachedAt = Date.now();
+    return result;
+  }
 
   const cuentas = rows.map((r) => ({
-    nombre: nameKey ? String(r[nameKey] || "").trim() : "",
-    rep: repKey ? String(r[repKey] || "").trim() : "",
+    nombre: String(r[nameKey] || "").trim(),
+    rep: String(r[repKey] || "").trim(),
   })).filter((c) => c.nombre);
 
-  cachedCuentas = cuentas;
+  const result = { cuentas, loaded: true, count: cuentas.length, path: CUENTAS_FILE_PATH };
+  cachedCuentas = result;
   cuentasCachedAt = Date.now();
-  return cuentas;
+  return result;
 }
 
 function normalizeName(s) {
@@ -272,21 +323,35 @@ function buildSystemPrompt(reps) {
   return header + buildRepsSection(reps) + "\n" + RULES_AND_FORMAT;
 }
 
-function buildContextBlock(inputLines, cuentas) {
-  const lines = inputLines.map((line) => {
+function buildLookupMap(inputLines, cuentas) {
+  const map = new Map();
+  for (const line of inputLines) {
     const [namePart] = line.split("|");
     const name = (namePart || "").trim();
-    if (!name) return null;
+    if (!name) continue;
     const match = lookupCuenta(name, cuentas);
-    if (!match) return `- "${name}" → NO EXISTE (cuenta nueva)`;
-    if (REPS_DISPONIBLES.has(match.rep)) {
-      return `- "${name}" → EXISTE, rep_actual="${match.rep}" (DISPONIBLE para reasignar)`;
-    }
-    return `- "${name}" → EXISTE, rep_actual="${match.rep}" (YA ASIGNADA)`;
-  }).filter(Boolean);
+    map.set(normalizeName(name), {
+      inputName: name,
+      existe: !!match,
+      repActual: match ? match.rep : null,
+      disponible: match ? REPS_DISPONIBLES.has(match.rep) : true,
+    });
+  }
+  return map;
+}
 
-  if (!lines.length) return "";
-  return `\n\nCONTEXTO DE CRM (estado actual de cada cuenta del input):\n${lines.join("\n")}`;
+function buildContextBlock(lookupMap, csvLoaded) {
+  if (!csvLoaded) {
+    return `\n\nCONTEXTO DE CRM: archivo de cuentas NO disponible en este momento. Trata TODAS las cuentas del input como NUEVAS (cuenta_existente=false, rep_actual=null).`;
+  }
+  if (!lookupMap.size) return "";
+  const lines = [];
+  for (const [, v] of lookupMap) {
+    if (!v.existe) lines.push(`- "${v.inputName}" → NO EXISTE (cuenta nueva)`);
+    else if (v.disponible) lines.push(`- "${v.inputName}" → EXISTE, rep_actual="${v.repActual}" (DISPONIBLE)`);
+    else lines.push(`- "${v.inputName}" → EXISTE, rep_actual="${v.repActual}" (YA ASIGNADA — NO reasignar)`);
+  }
+  return `\n\nCONTEXTO DE CRM (estado actual — es OBLIGATORIO usar estos valores exactos para cuenta_existente y rep_actual):\n${lines.join("\n")}`;
 }
 
 export async function POST(req) {
@@ -311,14 +376,22 @@ export async function POST(req) {
       );
     }
 
-    const [reps, cuentas] = await Promise.all([
+    const [reps, cuentasResult] = await Promise.all([
       fetchRepsFromSharePoint(),
       fetchCuentasFromSharePoint(),
     ]);
 
+    const validRepNames = new Set(
+      reps
+        .filter((r) => normalizeBool(r.Activo))
+        .map((r) => String(r.Nombre || "").trim())
+        .filter(Boolean)
+    );
+
     const systemPrompt = buildSystemPrompt(reps);
     const inputLines = input.split("\n").filter((l) => l.trim().length > 0);
-    const contextBlock = buildContextBlock(inputLines, cuentas);
+    const lookupMap = buildLookupMap(inputLines, cuentasResult.cuentas || []);
+    const contextBlock = buildContextBlock(lookupMap, cuentasResult.loaded);
     const userMessage = input + contextBlock;
 
     const client = new Anthropic({ apiKey: key });
@@ -349,7 +422,51 @@ export async function POST(req) {
       parsed = JSON.parse(match[0]);
     }
 
-    return Response.json(parsed);
+    // Post-procesado: override con datos del CSV y validación contra reps del xlsx
+    const validRepsPlusEscalation = new Set([
+      ...validRepNames,
+      "Barco, Diego",
+      "Fernandez Revuelta, Pablo",
+      "CM, Accounts Available",
+      "Office, City Moonlight",
+      "Por determinar",
+    ]);
+
+    const sanitized = parsed.map((r) => {
+      const out = { ...r };
+      const lookup = lookupMap.get(normalizeName(out.account || ""));
+
+      if (cuentasResult.loaded && lookup) {
+        out.cuenta_existente = lookup.existe;
+        out.rep_actual = lookup.repActual;
+        if (lookup.existe && !lookup.disponible) {
+          out.disponible = false;
+          out.rep_primario = lookup.repActual;
+          out.rep_alternativo = null;
+        }
+      } else if (!cuentasResult.loaded) {
+        out.cuenta_existente = false;
+        out.rep_actual = null;
+      }
+
+      if (out.rep_primario && !validRepsPlusEscalation.has(out.rep_primario)) {
+        out.rep_primario = "Por determinar";
+        out.disponible = false;
+      }
+      if (out.rep_alternativo && !validRepsPlusEscalation.has(out.rep_alternativo)) {
+        out.rep_alternativo = null;
+      }
+
+      return out;
+    });
+
+    if (!cuentasResult.loaded) {
+      console.warn("[cuentas CSV] no disponible:", cuentasResult.error, "path:", cuentasResult.path);
+    } else {
+      console.log(`[cuentas CSV] cargado OK: ${cuentasResult.count} filas`);
+    }
+
+    return Response.json(sanitized);
   } catch (err) {
     return Response.json(
       { error: err.message || "Error interno" },
