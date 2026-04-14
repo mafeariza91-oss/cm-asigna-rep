@@ -10,7 +10,7 @@ const REPS_FILE_PATH = (
 const REPS_SHEET = "Perfiles_Reps";
 const CUENTAS_FILE_PATH = (
   process.env.SHAREPOINT_CUENTAS_PATH ||
-  "Office Documents/Territorios/Cuentas_Activas.csv"
+  "Office Documents/Territorios/Cuentas Activas.csv"
 ).replace(/^Shared Documents\//i, "");
 
 const REPS_DISPONIBLES = new Set([
