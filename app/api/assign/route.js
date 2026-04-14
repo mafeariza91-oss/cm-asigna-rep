@@ -149,14 +149,26 @@ export async function POST(req) {
       return Response.json({ error: "input requerido" }, { status: 400 });
     }
 
-    console.log("[diag] hasKey:", !!process.env.ANTHROPIC_API_KEY,
-      "len:", process.env.ANTHROPIC_API_KEY?.length,
-      "prefix:", process.env.ANTHROPIC_API_KEY?.slice(0, 12));
+    const key = process.env.ANTHROPIC_API_KEY;
+    if (!key || key.length < 50) {
+      return Response.json(
+        {
+          error: "ANTHROPIC_API_KEY no disponible en runtime",
+          diag: {
+            present: !!key,
+            length: key?.length ?? 0,
+            prefix: key?.slice(0, 12) ?? null,
+            hint: "Verifica en Vercel → Settings → Environment Variables que ANTHROPIC_API_KEY esté configurada para el environment actual (Production/Preview) y redeploya.",
+          },
+        },
+        { status: 500 }
+      );
+    }
 
     const reps = await fetchRepsFromSharePoint();
     const systemPrompt = buildSystemPrompt(reps);
 
-    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+    const client = new Anthropic({ apiKey: key });
 
     const msg = await client.messages.create({
       model: "claude-sonnet-4-20250514",
