@@ -86,6 +86,10 @@ export default function Page() {
       "disponible",
       "confianza",
       "razonamiento",
+      "cuenta_existente",
+      "rep_actual",
+      "es_premium",
+      "escalar_a",
     ];
     const escape = (v) => {
       if (v === null || v === undefined) return "";
@@ -252,6 +256,10 @@ export default function Page() {
           {results.map((r, i) => {
             const repColor = REP_COLORS[r.rep_primario] || "#4A5669";
             const conf = CONFIANZA_COLORS[r.confianza] || CONFIANZA_COLORS.Media;
+            const repDisponible =
+              r.rep_actual === "CM, Accounts Available" ||
+              r.rep_actual === "Office, City Moonlight";
+            const escalarA = Array.isArray(r.escalar_a) ? r.escalar_a : [];
             return (
               <article
                 key={i}
@@ -266,7 +274,24 @@ export default function Page() {
               >
                 <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
                   <div style={{ minWidth: 0, flex: "1 1 240px" }}>
-                    <div style={{ fontWeight: 700, fontSize: 15, color: NAVY }}>{r.account || "—"}</div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                      <span style={{ fontWeight: 700, fontSize: 15, color: NAVY }}>{r.account || "—"}</span>
+                      {r.es_premium && (
+                        <span
+                          style={{
+                            background: "linear-gradient(135deg, #D4A017, #B8860B)",
+                            color: "white",
+                            padding: "3px 9px",
+                            borderRadius: 6,
+                            fontSize: 11,
+                            fontWeight: 700,
+                            letterSpacing: 0.3,
+                          }}
+                        >
+                          ⭐ ALTO POTENCIAL
+                        </span>
+                      )}
+                    </div>
                     <div style={{ fontSize: 13, color: "#4A5669", marginTop: 2 }}>{r.address || "—"}</div>
                     <div style={{ fontSize: 12, color: "#6B7588", marginTop: 4 }}>Zona: <strong>{r.zona || "—"}</strong></div>
                   </div>
@@ -286,6 +311,24 @@ export default function Page() {
                     {r.confianza || "—"}
                   </div>
                 </div>
+
+                {r.cuenta_existente && (
+                  <div
+                    style={{
+                      marginTop: 10,
+                      padding: "8px 10px",
+                      background: repDisponible ? "#E6F5EC" : "#FEF3DB",
+                      color: repDisponible ? "#1D8A4A" : "#8A5A00",
+                      borderRadius: 6,
+                      fontSize: 12,
+                      fontWeight: 600,
+                    }}
+                  >
+                    {repDisponible
+                      ? `✓ Cuenta existente — Disponible para asignar (estaba en: ${r.rep_actual})`
+                      : `⚠ Cuenta existente — Rep actual: ${r.rep_actual || "desconocido"}`}
+                  </div>
+                )}
 
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
                   <span
@@ -329,6 +372,41 @@ export default function Page() {
                     </span>
                   )}
                 </div>
+
+                {escalarA.length > 0 && (
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 10 }}>
+                    {escalarA.includes("Diego") && (
+                      <span
+                        style={{
+                          background: "#FEF3DB",
+                          color: "#8A5A00",
+                          padding: "4px 10px",
+                          borderRadius: 6,
+                          fontSize: 12,
+                          fontWeight: 600,
+                          border: "1px solid #E8C67A",
+                        }}
+                      >
+                        🔺 Escalar a Diego (CEO) antes de asignar
+                      </span>
+                    )}
+                    {escalarA.includes("Pablo") && (
+                      <span
+                        style={{
+                          background: "#E8EEFB",
+                          color: "#2A4A8A",
+                          padding: "4px 10px",
+                          borderRadius: 6,
+                          fontSize: 12,
+                          fontWeight: 600,
+                          border: "1px solid #B8C8EA",
+                        }}
+                      >
+                        📋 Pablo (Outbound) en el loop
+                      </span>
+                    )}
+                  </div>
+                )}
 
                 {r.razonamiento && (
                   <p style={{ margin: "10px 0 0", fontSize: 13, color: "#4A5669", fontStyle: "italic" }}>
