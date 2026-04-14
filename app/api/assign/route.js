@@ -3,28 +3,7 @@ import Anthropic from "@anthropic-ai/sdk";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-const SYSTEM_PROMPT = `Eres el sistema de asignación de cuentas de City Moonlight Wines & Spirits, distribuidor de vinos y licores en New York y New Jersey.
-
-REPS QUE SÍ RECIBEN CUENTAS:
-
-NY:
-- Garay, Anthony — Full-time. Long Island South Shore (Baldwin, Bay Shore, Amityville, Rockville Centre, Westbury, Franklin Square, Nassau/Suffolk County). 96 cuentas.
-- Terdiman, Irene — Full-time. Nueva. Brooklyn (casi exclusivo). 69 cuentas. Prioridad para crecer.
-- Miranti, Michael — Part-time. Manhattan (Midtown, UES, UWS, Chelsea, SoHo, Tribeca). 66 cuentas. ASIGNAR CON CUIDADO — solo cuentas selectas.
-- Perez, Gaudencio — Manhattan Upper (Harlem, Washington Heights, Inwood), El Bronx. 66 cuentas. Fuerte en comunidades latinas.
-- Gattinella, Mike — Part-time. Brooklyn + algo Manhattan. 32 cuentas. Con potencial.
-- Spaleta, Domenik — Part-time. Nuevo. Queens (Astoria, Jackson Heights, Corona, East Elmhurst, Flushing) + Bronx. 32 cuentas.
-- Hautzig, David — Part-time. Muy bueno. Upstate NY (Albany, Saratoga Springs, Hudson Valley, Catskills, Clifton Park). Especialista único. 34 cuentas.
-
-NJ:
-- Calderon, Scott — Full-time. NJ Norte / Hudson County (Hoboken, Jersey City, Newark, North Bergen, Cliffside Park). 114 cuentas.
-- Westenberger, Matt — Full-time. NJ Central / Morris County (Morristown, Union, New Brunswick, Kearny, Linden, Basking Ridge). 140 cuentas.
-- Rozinsky, Irina — NJ Sur / Ocean County (Lakewood, Toms River, Hamilton, Trenton, East Brunswick). 149 cuentas. TERRITORIO MUY GRANDE — solo asignar si zona sin cobertura.
-
-REPS QUE NO RECIBEN CUENTAS NUEVAS:
-Angeroise Michele, Cittadino Robert, Forni Tiziana, Landeck Howard, Martin David, Webber Chandler.
-
-REGLAS:
+const RULES_AND_FORMAT = `REGLAS:
 - Brooklyn → Terdiman (primario), Gattinella (overflow)
 - Long Island → Garay
 - Hoboken/Jersey City/Newark → Calderon
@@ -50,6 +29,84 @@ Responde SOLO con JSON array sin markdown. Cada item:
   "razonamiento": "1-2 oraciones en español"
 }`;
 
+let cachedToken = null;
+let tokenExpiresAt = 0;
+
+async function getGraphToken() {
+  if (cachedToken && Date.now() < tokenExpiresAt) return cachedToken;
+
+  const tenant = process.env.AZURE_TENANT_ID;
+  const body = new URLSearchParams({
+    client_id: process.env.AZURE_CLIENT_ID,
+    client_secret: process.env.AZURE_CLIENT_SECRET,
+    scope: "https://graph.microsoft.com/.default",
+    grant_type: "client_credentials",
+  });
+
+  const res = await fetch(
+    `https://login.microsoftonline.com/${tenant}/oauth2/v2.0/token`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body,
+    }
+  );
+
+  if (!res.ok) {
+    throw new Error(`Azure token error ${res.status}: ${await res.text()}`);
+  }
+
+  const data = await res.json();
+  cachedToken = data.access_token;
+  tokenExpiresAt = Date.now() + (data.expires_in - 60) * 1000;
+  return cachedToken;
+}
+
+async function fetchRepsFromSharePoint() {
+  const token = await getGraphToken();
+  const siteId = process.env.SHAREPOINT_SITE_ID;
+  const listId = process.env.SHAREPOINT_LIST_ID;
+
+  const url = `https://graph.microsoft.com/v1.0/sites/${siteId}/lists/${listId}/items?expand=fields&$top=500`;
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+
+  if (!res.ok) {
+    throw new Error(`SharePoint error ${res.status}: ${await res.text()}`);
+  }
+
+  const data = await res.json();
+  return data.value.map((item) => item.fields);
+}
+
+function buildRepsSection(reps) {
+  const activos = reps.filter((r) => r.Activo === true);
+  const reciben = activos.filter(
+    (r) => r.AceptaCuentas === "Sí" || r.AceptaCuentas === "Con cuidado"
+  );
+  const noReciben = activos.filter((r) => r.AceptaCuentas === "No");
+
+  let out = "REPS QUE SÍ RECIBEN CUENTAS:\n\n";
+  for (const r of reciben) {
+    const cuidado =
+      r.AceptaCuentas === "Con cuidado" ? " ASIGNAR CON CUIDADO." : "";
+    out += `- ${r.Nombre} — ${r.Tipo}. ${r.Territorio}. Zonas: ${r.Zonas}.${cuidado}\n`;
+  }
+
+  if (noReciben.length) {
+    out += "\nREPS QUE NO RECIBEN CUENTAS NUEVAS:\n";
+    out += noReciben.map((r) => r.Nombre).join(", ") + ".\n";
+  }
+
+  return out;
+}
+
+function buildSystemPrompt(reps) {
+  const header = `Eres el sistema de asignación de cuentas de City Moonlight Wines & Spirits, distribuidor de vinos y licores en New York y New Jersey.\n\n`;
+  return header + buildRepsSection(reps) + "\n" + RULES_AND_FORMAT;
+}
+
 export async function POST(req) {
   try {
     const { input } = await req.json();
@@ -57,16 +114,22 @@ export async function POST(req) {
       return Response.json({ error: "input requerido" }, { status: 400 });
     }
 
+    const reps = await fetchRepsFromSharePoint();
+    const systemPrompt = buildSystemPrompt(reps);
+
     const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
     const msg = await client.messages.create({
       model: "claude-sonnet-4-20250514",
       max_tokens: 4096,
-      system: SYSTEM_PROMPT,
+      system: systemPrompt,
       messages: [{ role: "user", content: input }],
     });
 
-    const text = msg.content.map((b) => (b.type === "text" ? b.text : "")).join("").trim();
+    const text = msg.content
+      .map((b) => (b.type === "text" ? b.text : ""))
+      .join("")
+      .trim();
 
     let parsed;
     try {
@@ -74,13 +137,19 @@ export async function POST(req) {
     } catch {
       const match = text.match(/\[[\s\S]*\]/);
       if (!match) {
-        return Response.json({ error: "Respuesta no-JSON del modelo", raw: text }, { status: 502 });
+        return Response.json(
+          { error: "Respuesta no-JSON del modelo", raw: text },
+          { status: 502 }
+        );
       }
       parsed = JSON.parse(match[0]);
     }
 
     return Response.json(parsed);
   } catch (err) {
-    return Response.json({ error: err.message || "Error interno" }, { status: 500 });
+    return Response.json(
+      { error: err.message || "Error interno" },
+      { status: 500 }
+    );
   }
 }
