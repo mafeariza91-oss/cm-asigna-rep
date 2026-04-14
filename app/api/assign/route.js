@@ -149,6 +149,10 @@ export async function POST(req) {
       return Response.json({ error: "input requerido" }, { status: 400 });
     }
 
+    console.log("[diag] hasKey:", !!process.env.ANTHROPIC_API_KEY,
+      "len:", process.env.ANTHROPIC_API_KEY?.length,
+      "prefix:", process.env.ANTHROPIC_API_KEY?.slice(0, 12));
+
     const reps = await fetchRepsFromSharePoint();
     const systemPrompt = buildSystemPrompt(reps);
 
